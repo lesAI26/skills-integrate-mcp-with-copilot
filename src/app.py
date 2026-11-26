@@ -5,14 +5,17 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+import secrets
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+teacher_auth = HTTPBasic(auto_error=False)
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -88,8 +91,50 @@ def get_activities():
     return activities
 
 
+def authenticate_teacher(
+    credentials: HTTPBasicCredentials | None = Depends(teacher_auth),
+):
+    """Verify teacher credentials configured in the server environment."""
+    username = os.getenv("TEACHER_USERNAME")
+    password = os.getenv("TEACHER_PASSWORD")
+
+    if not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Teacher authentication is not configured",
+        )
+
+    if credentials is None:
+        valid_credentials = False
+    else:
+        valid_username = secrets.compare_digest(
+            credentials.username.encode("utf-8"), username.encode("utf-8")
+        )
+        valid_password = secrets.compare_digest(
+            credentials.password.encode("utf-8"), password.encode("utf-8")
+        )
+        valid_credentials = valid_username and valid_password
+
+    if not valid_credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid teacher credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+@app.post("/auth/login")
+def login_teacher(_: None = Depends(authenticate_teacher)):
+    """Validate credentials so the web app can enter teacher mode."""
+    return {"message": "Logged in"}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(
+    activity_name: str,
+    email: str,
+    _: None = Depends(authenticate_teacher),
+):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +156,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    _: None = Depends(authenticate_teacher),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
